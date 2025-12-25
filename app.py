@@ -3,26 +3,38 @@ import pandas as pd
 from fpdf import FPDF
 import base64
 
-# --- CONFIG & LOAD DATA ---
 st.set_page_config(page_title="Universal Wealth Planner", page_icon="🌌", layout="wide")
 
 @st.cache_data
 def load_data():
     try:
         df = pd.read_csv('universe_data.csv')
-        # Safety Filter (No Sector/Thematic)
+        
+        # 1. REMOVE DUPLICATES (Keep only one variant per fund code)
+        # We prefer 'Growth' over 'Bonus' or 'Dividend'
+        df = df[~df['Name'].str.lower().str.contains('bonus|dividend')]
+        
+        # 2. SAFETY FILTER
         risky_keywords = ['sector', 'thematic', 'international', 'global', 'gold', 'commodity', 'psu', 'infra', 'tech']
-        df['Is_Safe'] = ~df['Name'].str.lower().apply(lambda x: any(k in x for k in risky_keywords))
+        # Note: We apply this mainly to Equity. For Debt, 'PSU' is actually safe (Banking & PSU Debt).
+        
+        def is_safe(row):
+            n = row['Name'].lower()
+            # If it's an Equity fund, check for risky keywords
+            if row['Category'] == 'Equity':
+                return not any(k in n for k in risky_keywords)
+            return True # Debt/Liquid is generally safe from "Sector" risks
+            
+        df['Is_Safe'] = df.apply(is_safe, axis=1)
         return df
     except: return None
 
 df = load_data()
-
 if df is None:
-    st.error("⚠️ Data file not found. Please upload 'universe_data.csv' to GitHub.")
+    st.error("⚠️ Data file not found.")
     st.stop()
 
-# --- HELPER FUNCTIONS ---
+# --- HELPER ---
 def format_inr(number):
     if number >= 10000000: return f"₹{number/10000000:.2f} Cr"
     elif number >= 100000: return f"₹{number/100000:.2f} L"
@@ -30,27 +42,24 @@ def format_inr(number):
 
 if 'goals' not in st.session_state: st.session_state.goals = []
 
-# --- UI HEADER ---
 st.title("🌌 Universal Wealth Planner")
-st.caption(f"Database: {len(df)} Funds | FMPs & Risky Sectors Excluded")
+st.caption(f"Database: {len(df)} Clean Funds | 'Bonus' Options Removed")
 
-# --- INPUT SECTION ---
+# --- INPUT ---
 with st.expander("➕ Add a Life Goal", expanded=True):
     c1, c2, c3 = st.columns(3)
-    g_name = c1.text_input("Goal Name", placeholder="e.g. Retirement")
-    g_amt = c2.number_input("Target Amount (Lakhs)", 1, 5000, 50, help="100 = 1 Crore")
-    g_yrs = c3.slider("Years to Goal", 1, 30, 10)
-    
-    if st.button("Add to Plan"):
-        if g_name:
-            st.session_state.goals.append({"name": g_name, "amt": g_amt*100000, "yrs": g_yrs})
-            st.rerun()
+    g_name = c1.text_input("Goal Name")
+    g_amt = c2.number_input("Target (Lakhs)", 1, 5000, 50)
+    g_yrs = c3.slider("Years", 1, 30, 10)
+    if st.button("Add"):
+        st.session_state.goals.append({"name": g_name, "amt": g_amt*100000, "yrs": g_yrs})
+        st.rerun()
 
 # --- ENGINE ---
 if st.session_state.goals:
     st.divider()
     total_sip = 0
-    used_funds = []
+    used_funds = [] # Global list to avoid repeats across DIFFERENT goals
     pdf_data = []
 
     for i, goal in enumerate(st.session_state.goals):
@@ -60,41 +69,50 @@ if st.session_state.goals:
             st.session_state.goals.pop(i)
             st.rerun()
         
-        # --- STRICT STRATEGY SELECTOR ---
-        # 1. SHORT TERM (< 3 Years) -> DEBT ONLY
+        # STRATEGY
         if goal['yrs'] <= 3:
             strat, ret = "Conservative (Safe Debt)", 7
-            # Filter: Category is 'Safe_Debt' OR Low Risk + No Equity in name
             candidates = df[
                 (df['Category'] == 'Safe_Debt') | 
                 ((df['Std_Dev'] < 3) & (~df['Name'].str.lower().str.contains('equity')))
             ].sort_values('Std_Dev', ascending=True)
 
-        # 2. MEDIUM TERM (4-7 Years) -> HYBRID / BALANCED
         elif goal['yrs'] <= 7:
             strat, ret = "Balanced (Hybrid/Large Cap)", 10
-            # Filter: Safe Equity/Hybrid + Not High Risk
             candidates = df[
                 (df['Is_Safe']) & 
                 (df['Risk_Grade'] != 'High') &
                 (df['Name'].str.lower().str.contains('hybrid|large|balanced|bluechip'))
             ].sort_values('Freq_Score', ascending=False)
 
-        # 3. LONG TERM (8+ Years) -> PURE EQUITY
         else:
             strat, ret = "Aggressive (Wealth Equity)", 13
-            # Filter: Pure Equity only. EXCLUDE Debt/Income keywords.
             candidates = df[
                 (df['Is_Safe']) & 
                 (df['Category'] == 'Equity') & 
                 (~df['Name'].str.lower().str.contains('debt|bond|income'))
             ].sort_values(['Freq_Score', 'Avg_Return'], ascending=[False, False])
         
-        # DIVERSIFY
-        fresh = candidates[~candidates['Code'].isin(used_funds)]
-        if fresh.empty: fresh = candidates
-        recs = fresh.head(2)
-        used_funds.extend(recs['Code'].tolist())
+        # DIVERSIFICATION LOGIC
+        # 1. Remove funds used in previous goals
+        # 2. Remove funds from same AMC in current goal (e.g. don't pick 2 Nippon funds)
+        
+        recs = []
+        current_goal_amcs = []
+        
+        # Iterate through candidates
+        for _, fund in candidates.iterrows():
+            if len(recs) >= 2: break # We only need 2
+            
+            # Extract AMC Name (First word usually, e.g., "Nippon", "HDFC")
+            amc_name = fund['Name'].split()[0]
+            
+            if fund['Code'] not in used_funds and amc_name not in current_goal_amcs:
+                recs.append(fund)
+                used_funds.append(fund['Code'])
+                current_goal_amcs.append(amc_name)
+        
+        recs_df = pd.DataFrame(recs)
 
         # MATH
         r = ret/1200
@@ -113,12 +131,11 @@ if st.session_state.goals:
                 if tax > 50000: st.warning(f"⚠️ Est. Tax: {format_inr(tax)}")
                 else: st.success("✅ Tax efficient")
             with c2:
-                st.write("**Recommended Funds:**")
-                for _, f in recs.iterrows():
+                for _, f in recs_df.iterrows():
                     st.markdown(f"**{f['Name']}**")
                     st.caption(f"Score: {int(f['Freq_Score'])}/5 | Risk: {f['Risk_Grade']} | Avg Ret: {f['Avg_Return']}%")
         st.divider()
-        pdf_data.append({"goal": goal['name'], "sip": format_inr(sip), "funds": list(recs['Name'])})
+        pdf_data.append({"goal": goal['name'], "sip": format_inr(sip), "funds": list(recs_df['Name'])})
 
     st.markdown(f"### 💰 Total Monthly Investment: **{format_inr(total_sip)}**")
     
