@@ -9,26 +9,32 @@ import datetime
 st.set_page_config(page_title="Universal Wealth Manager", page_icon="📈", layout="wide")
 mf = Mftool()
 
-# --- LOAD DATABASE ---
+# --- OPTIMIZED DATA LOADER (Loads once per session) ---
 @st.cache_data
-def load_data():
+def get_cleaned_data():
     try:
         df = pd.read_csv('universe_data.csv')
+        # 1. Cleaning
         df = df[~df['Name'].str.lower().str.contains('bonus|dividend')]
         zombies = ['reliance', 'fixed tenure', 'dual advantage', 'capital protection', 'interval', 'quarterly', 'series']
         df = df[~df['Name'].str.lower().apply(lambda x: any(z in x for z in zombies))]
         
+        # 2. Safety Tagging
         risky_keywords = ['sector', 'thematic', 'international', 'global', 'gold', 'commodity', 'psu', 'infra', 'tech']
         def is_safe(row):
             if row['Category'] == 'Equity':
                 return not any(k in row['Name'].lower() for k in risky_keywords)
             return True
-            
         df['Is_Safe'] = df.apply(is_safe, axis=1)
         return df
     except: return None
 
-df = load_data()
+# Load data into session state to avoid re-loading on every click
+if 'master_df' not in st.session_state:
+    with st.spinner("Booting up the Wealth Engine..."):
+        st.session_state.master_df = get_cleaned_data()
+
+df = st.session_state.master_df
 if df is None: st.error("⚠️ Database missing. Please upload 'universe_data.csv'."); st.stop()
 
 # --- HELPER FUNCTIONS ---
@@ -59,12 +65,12 @@ def get_sip_history(code, monthly_amt, years):
 
 # --- APP UI ---
 st.title("📈 Universal Wealth Manager")
-st.caption(f"Database: {len(df)} Verified Funds")
+st.caption(f"Database: {len(df)} Verified Funds | Speed Optimized ⚡")
 
 tab1, tab2 = st.tabs(["🎯 Plan Future Goals", "📊 Track Past Investments"])
 
 # ==========================================
-# TAB 1: FUTURE PLANNER (Updated with Gains)
+# TAB 1: FUTURE PLANNER
 # ==========================================
 with tab1:
     if 'goals' not in st.session_state: st.session_state.goals = []
@@ -119,25 +125,24 @@ with tab1:
             sip = goal['amt'] * r / ((1+r)**n - 1)
             total_sip += sip
             
-            # --- NEW CALC: BREAKDOWN ---
+            # BREAKDOWN (Added % Gain)
             total_invested = sip * n
             est_gain = goal['amt'] - total_invested
+            roi_pct = (est_gain / total_invested) * 100 if total_invested > 0 else 0
             
             # DISPLAY
             with st.container():
                 c1, c2, c3 = st.columns([1, 1, 1.5])
                 
-                # Column 1: The Requirement
                 with c1:
                     st.metric("SIP Required", f"{format_inr(sip)}/mo")
                     st.caption(f"Strategy: {strat}")
                 
-                # Column 2: The Breakdown (NEW)
                 with c2:
                     st.metric("You Invest", format_inr(total_invested))
-                    st.metric("Est. Gains", format_inr(est_gain), delta="Profit")
+                    # FIXED: Added % Gain here
+                    st.metric("Est. Gains", format_inr(est_gain), delta=f"+{roi_pct:.0f}% Profit")
                     
-                # Column 3: The Funds
                 with c3:
                     for _, f in recs_df.iterrows():
                         st.markdown(f"**{f['Name']}**")
@@ -147,10 +152,10 @@ with tab1:
                             st.caption(f"Score: {int(f['Freq_Score'])}/5 | Avg Ret: {f['Avg_Return']}%")
             st.divider()
             
-            # Add breakdown to PDF data
             pdf_data.append({
                 "goal": goal['name'], "sip": format_inr(sip), 
                 "invested": format_inr(total_invested), "gain": format_inr(est_gain),
+                "roi": f"{roi_pct:.0f}%",
                 "funds": list(recs_df['Name'])
             })
 
@@ -168,7 +173,7 @@ with tab1:
                 pdf.set_font("Arial", size=11)
                 pdf.cell(200, 6, f" - SIP Required: {d['sip']}", ln=True)
                 pdf.cell(200, 6, f" - You Invest: {d['invested']}", ln=True)
-                pdf.cell(200, 6, f" - Est. Profit: {d['gain']}", ln=True)
+                pdf.cell(200, 6, f" - Est. Profit: {d['gain']} ({d['roi']})", ln=True)
                 pdf.ln(2)
                 pdf.set_font("Arial", 'I', 10)
                 pdf.cell(200, 6, "Recommended Funds:", ln=True)
