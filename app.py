@@ -4,6 +4,7 @@ from fpdf import FPDF
 import base64
 from mftool import Mftool
 import datetime
+import altair as alt  # NEW: Imported for Pro Charts
 
 # --- CONFIG ---
 st.set_page_config(page_title="Universal Wealth Manager", page_icon="📈", layout="wide")
@@ -41,7 +42,6 @@ def format_inr(number):
     else: return f"₹{number:,.0f}"
 
 # --- OPTIMIZED API FETCHER (Cache: ON) ---
-# This fixes the "Very Slow" issue by remembering past API calls
 @st.cache_data
 def get_sip_history(code, monthly_amt, years):
     try:
@@ -55,7 +55,6 @@ def get_sip_history(code, monthly_amt, years):
         start_date = datetime.datetime.now() - datetime.timedelta(days=years*365)
         nav_df = nav_df[nav_df['date'] >= start_date]
         
-        # Resample to Monthly Start
         nav_df.set_index('date', inplace=True)
         monthly_data = nav_df.resample('MS').first().dropna()
         
@@ -148,12 +147,27 @@ with tab1:
                     st.metric("You Invest", format_inr(total_invested))
                     st.metric("Est. Gains", format_inr(est_gain), delta=f"+{roi_pct:.0f}% Profit")
                     
-                    # --- FIXED CHART (Removed Custom Colors to fix Crash) ---
-                    chart_df = pd.DataFrame({
-                        "Type": ["Invested", "Profit"], 
-                        "Amount": [total_invested, est_gain]
+                    # --- NEW: PROFESSIONAL ALTAIR CHART ---
+                    # 1. Prepare Data with Pre-Formatted Strings for Tooltip
+                    chart_data = pd.DataFrame({
+                        "Category": ["Principal", "Profit"],
+                        "Amount": [total_invested, est_gain],
+                        "Label": [format_inr(total_invested), format_inr(est_gain)], # Clean String
+                        "Color": ["#FF6B6B", "#4ECDC4"] # Soft Red & Teal
                     })
-                    st.bar_chart(chart_df, x="Type", y="Amount")
+                    
+                    # 2. Build Chart
+                    c = alt.Chart(chart_data).mark_bar(cornerRadiusTopLeft=10, cornerRadiusTopRight=10).encode(
+                        x=alt.X('Category', sort=None, axis=alt.Axis(labelAngle=0, title=None)),
+                        y=alt.Y('Amount', axis=None), # Hide Y-Axis numbers for cleaner look
+                        color=alt.Color('Category', scale=alt.Scale(range=['#FF6B6B', '#4ECDC4']), legend=None),
+                        tooltip=[
+                            alt.Tooltip('Category', title='Type'),
+                            alt.Tooltip('Label', title='Amount') # Shows "₹2.54 Cr"
+                        ]
+                    ).properties(height=200)
+                    
+                    st.altair_chart(c, use_container_width=True)
                     
                 with c3:
                     for _, f in recs_df.iterrows():
@@ -213,7 +227,6 @@ with tab2:
         with st.spinner("Fetching data..."):
             fund_code = df[df['Name'] == selected_fund_name]['Code'].values[0]
             fund_stats = df[df['Code'] == fund_code].iloc[0]
-            # Calls the Cached Function
             result = get_sip_history(fund_code, sip_amt, years_ago)
             
             if result:
