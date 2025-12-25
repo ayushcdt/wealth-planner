@@ -9,17 +9,15 @@ import datetime
 st.set_page_config(page_title="Universal Wealth Manager", page_icon="📈", layout="wide")
 mf = Mftool()
 
-# --- OPTIMIZED DATA LOADER (Loads once per session) ---
+# --- OPTIMIZED DATA LOADER ---
 @st.cache_data
 def get_cleaned_data():
     try:
         df = pd.read_csv('universe_data.csv')
-        # 1. Cleaning
         df = df[~df['Name'].str.lower().str.contains('bonus|dividend')]
         zombies = ['reliance', 'fixed tenure', 'dual advantage', 'capital protection', 'interval', 'quarterly', 'series']
         df = df[~df['Name'].str.lower().apply(lambda x: any(z in x for z in zombies))]
         
-        # 2. Safety Tagging
         risky_keywords = ['sector', 'thematic', 'international', 'global', 'gold', 'commodity', 'psu', 'infra', 'tech']
         def is_safe(row):
             if row['Category'] == 'Equity':
@@ -29,7 +27,6 @@ def get_cleaned_data():
         return df
     except: return None
 
-# Load data into session state to avoid re-loading on every click
 if 'master_df' not in st.session_state:
     with st.spinner("Booting up the Wealth Engine..."):
         st.session_state.master_df = get_cleaned_data()
@@ -125,7 +122,7 @@ with tab1:
             sip = goal['amt'] * r / ((1+r)**n - 1)
             total_sip += sip
             
-            # BREAKDOWN (Added % Gain)
+            # BREAKDOWN
             total_invested = sip * n
             est_gain = goal['amt'] - total_invested
             roi_pct = (est_gain / total_invested) * 100 if total_invested > 0 else 0
@@ -140,8 +137,15 @@ with tab1:
                 
                 with c2:
                     st.metric("You Invest", format_inr(total_invested))
-                    # FIXED: Added % Gain here
                     st.metric("Est. Gains", format_inr(est_gain), delta=f"+{roi_pct:.0f}% Profit")
+                    
+                    # --- NEW CHART CODE ADDED HERE ---
+                    chart_df = pd.DataFrame({
+                        "Type": ["Invested", "Profit"], 
+                        "Amount": [total_invested, est_gain]
+                    })
+                    # Red for investment, Green for profit
+                    st.bar_chart(chart_df, x="Type", y="Amount", color=["#FF4B4B", "#00CC96"])
                     
                 with c3:
                     for _, f in recs_df.iterrows():
@@ -155,13 +159,11 @@ with tab1:
             pdf_data.append({
                 "goal": goal['name'], "sip": format_inr(sip), 
                 "invested": format_inr(total_invested), "gain": format_inr(est_gain),
-                "roi": f"{roi_pct:.0f}%",
-                "funds": list(recs_df['Name'])
+                "roi": f"{roi_pct:.0f}%", "funds": list(recs_df['Name'])
             })
 
         st.markdown(f"### 💰 Total Monthly Investment: **{format_inr(total_sip)}**")
         
-        # PDF GENERATOR
         def create_pdf(data, total):
             pdf = FPDF()
             pdf.add_page()
