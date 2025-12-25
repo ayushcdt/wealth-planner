@@ -9,7 +9,7 @@ import datetime
 st.set_page_config(page_title="Universal Wealth Manager", page_icon="📈", layout="wide")
 mf = Mftool()
 
-# --- OPTIMIZED DATA LOADER ---
+# --- OPTIMIZED DATA LOADER (Cache: ON) ---
 @st.cache_data
 def get_cleaned_data():
     try:
@@ -40,21 +40,30 @@ def format_inr(number):
     elif number >= 100000: return f"₹{number/100000:.2f} L"
     else: return f"₹{number:,.0f}"
 
+# --- OPTIMIZED API FETCHER (Cache: ON) ---
+# This fixes the "Very Slow" issue by remembering past API calls
+@st.cache_data
 def get_sip_history(code, monthly_amt, years):
     try:
         data = mf.get_scheme_historical_nav(str(code), as_json=False)
         if not data: return None
         nav_df = pd.DataFrame(data['data'])
-        nav_df['nav'] = pd.to_numeric(nav_df['nav']); nav_df['date'] = pd.to_datetime(nav_df['date'], format='%d-%m-%Y')
+        nav_df['nav'] = pd.to_numeric(nav_df['nav'])
+        nav_df['date'] = pd.to_datetime(nav_df['date'], format='%d-%m-%Y')
         nav_df = nav_df.sort_values('date')
+        
         start_date = datetime.datetime.now() - datetime.timedelta(days=years*365)
         nav_df = nav_df[nav_df['date'] >= start_date]
+        
+        # Resample to Monthly Start
         nav_df.set_index('date', inplace=True)
         monthly_data = nav_df.resample('MS').first().dropna()
+        
         total_units = 0; invested = 0
         for nav in monthly_data['nav']:
             total_units += monthly_amt / nav
             invested += monthly_amt
+            
         latest_nav = nav_df.iloc[-1]['nav']
         current_value = total_units * latest_nav
         return invested, current_value, (current_value - invested), ((current_value/invested)-1)*100
@@ -122,7 +131,7 @@ with tab1:
             sip = goal['amt'] * r / ((1+r)**n - 1)
             total_sip += sip
             
-            # BREAKDOWN
+            # BREAKDOWN & GAINS
             total_invested = sip * n
             est_gain = goal['amt'] - total_invested
             roi_pct = (est_gain / total_invested) * 100 if total_invested > 0 else 0
@@ -139,13 +148,12 @@ with tab1:
                     st.metric("You Invest", format_inr(total_invested))
                     st.metric("Est. Gains", format_inr(est_gain), delta=f"+{roi_pct:.0f}% Profit")
                     
-                    # --- NEW CHART CODE ADDED HERE ---
+                    # --- FIXED CHART (Removed Custom Colors to fix Crash) ---
                     chart_df = pd.DataFrame({
                         "Type": ["Invested", "Profit"], 
                         "Amount": [total_invested, est_gain]
                     })
-                    # Red for investment, Green for profit
-                    st.bar_chart(chart_df, x="Type", y="Amount", color=["#FF4B4B", "#00CC96"])
+                    st.bar_chart(chart_df, x="Type", y="Amount")
                     
                 with c3:
                     for _, f in recs_df.iterrows():
@@ -164,6 +172,7 @@ with tab1:
 
         st.markdown(f"### 💰 Total Monthly Investment: **{format_inr(total_sip)}**")
         
+        # PDF GENERATOR
         def create_pdf(data, total):
             pdf = FPDF()
             pdf.add_page()
@@ -204,6 +213,7 @@ with tab2:
         with st.spinner("Fetching data..."):
             fund_code = df[df['Name'] == selected_fund_name]['Code'].values[0]
             fund_stats = df[df['Code'] == fund_code].iloc[0]
+            # Calls the Cached Function
             result = get_sip_history(fund_code, sip_amt, years_ago)
             
             if result:
