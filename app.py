@@ -10,23 +10,16 @@ st.set_page_config(page_title="Universal Wealth Planner", page_icon="🌌", layo
 def load_data():
     try:
         df = pd.read_csv('universe_data.csv')
-        # --- SAFETY FILTER ---
-        # We filter out risky categories from recommendations, 
-        # but keep them in the file for reference.
-        risky_keywords = [
-            'sector', 'thematic', 'international', 'global', 'gold', 'commodity',
-            'tech', 'pharma', 'infra', 'psu', 'manufacturing', 'energy'
-        ]
-        # Create a "Safe" flag
+        # Safety Filter (No Sector/Thematic)
+        risky_keywords = ['sector', 'thematic', 'international', 'global', 'gold', 'commodity', 'psu', 'infra', 'tech']
         df['Is_Safe'] = ~df['Name'].str.lower().apply(lambda x: any(k in x for k in risky_keywords))
         return df
-    except FileNotFoundError:
-        return None
+    except: return None
 
 df = load_data()
 
 if df is None:
-    st.error("⚠️ 'universe_data.csv' not found! Please upload it to your GitHub repository.")
+    st.error("⚠️ Data file not found. Please upload 'universe_data.csv' to GitHub.")
     st.stop()
 
 # --- HELPER FUNCTIONS ---
@@ -35,33 +28,27 @@ def format_inr(number):
     elif number >= 100000: return f"₹{number/100000:.2f} L"
     else: return f"₹{number:,.0f}"
 
-if 'goals' not in st.session_state:
-    st.session_state.goals = []
+if 'goals' not in st.session_state: st.session_state.goals = []
 
 # --- UI HEADER ---
 st.title("🌌 Universal Wealth Planner")
-st.markdown(f"**Database:** {len(df)} Funds (Equity, Debt, Hybrid, Index).")
-st.caption("Powered by 'God Mode' Analysis Engine")
+st.caption(f"Database: {len(df)} Funds | FMPs & Risky Sectors Excluded")
 
-# --- INPUT ---
+# --- INPUT SECTION ---
 with st.expander("➕ Add a Life Goal", expanded=True):
     c1, c2, c3 = st.columns(3)
     g_name = c1.text_input("Goal Name", placeholder="e.g. Retirement")
-    g_input = c2.number_input("Target Amount", min_value=1, value=50, help="Enter in Lakhs (e.g., 100 = 1 Cr)")
+    g_amt = c2.number_input("Target Amount (Lakhs)", 1, 5000, 50, help="100 = 1 Crore")
     g_yrs = c3.slider("Years to Goal", 1, 30, 10)
-    c2.caption(f"Target: {format_inr(g_input * 100000)}")
-
+    
     if st.button("Add to Plan"):
         if g_name:
-            st.session_state.goals.append({"name": g_name, "amt": g_input * 100000, "yrs": g_yrs})
-            st.success(f"Added {g_name}")
+            st.session_state.goals.append({"name": g_name, "amt": g_amt*100000, "yrs": g_yrs})
             st.rerun()
 
 # --- ENGINE ---
 if st.session_state.goals:
     st.divider()
-    st.header("Your Personalized Roadmap")
-    
     total_sip = 0
     used_funds = []
     pdf_data = []
@@ -73,38 +60,48 @@ if st.session_state.goals:
             st.session_state.goals.pop(i)
             st.rerun()
         
-        # STRATEGY SELECTOR
+        # --- STRICT STRATEGY SELECTOR ---
+        # 1. SHORT TERM (< 3 Years) -> DEBT ONLY
         if goal['yrs'] <= 3:
-            strat, ret, note = "Conservative", 7, "Short term: Use Liquid/Ultra-Short Debt."
-            # Filter: Debt/Liquid Keywords OR Low Risk
-            candidates = df[df['Name'].str.lower().str.contains('liquid|debt|bond|overnight') | (df['Std_Dev'] < 5)]
-            candidates = candidates.sort_values('Std_Dev', ascending=True)
-            
+            strat, ret = "Conservative (Safe Debt)", 7
+            # Filter: Category is 'Safe_Debt' OR Low Risk + No Equity in name
+            candidates = df[
+                (df['Category'] == 'Safe_Debt') | 
+                ((df['Std_Dev'] < 3) & (~df['Name'].str.lower().str.contains('equity')))
+            ].sort_values('Std_Dev', ascending=True)
+
+        # 2. MEDIUM TERM (4-7 Years) -> HYBRID / BALANCED
         elif goal['yrs'] <= 7:
-            strat, ret, note = "Balanced", 10, "Medium term: Use Hybrid or Large Cap."
-            # Filter: Safe Equity only
-            candidates = df[(df['Is_Safe'] == True) & (df['Risk_Grade'] != 'High')]
-            candidates = candidates.sort_values('Freq_Score', ascending=False)
-            
+            strat, ret = "Balanced (Hybrid/Large Cap)", 10
+            # Filter: Safe Equity/Hybrid + Not High Risk
+            candidates = df[
+                (df['Is_Safe']) & 
+                (df['Risk_Grade'] != 'High') &
+                (df['Name'].str.lower().str.contains('hybrid|large|balanced|bluechip'))
+            ].sort_values('Freq_Score', ascending=False)
+
+        # 3. LONG TERM (8+ Years) -> PURE EQUITY
         else:
-            strat, ret, note = "Aggressive", 13, "Long term: pure Equity wealth creation."
-            # Filter: Safe Equity, sorted by Consistency + Return
-            candidates = df[df['Is_Safe'] == True].sort_values(['Freq_Score', 'Avg_Return'], ascending=[False, False])
+            strat, ret = "Aggressive (Wealth Equity)", 13
+            # Filter: Pure Equity only. EXCLUDE Debt/Income keywords.
+            candidates = df[
+                (df['Is_Safe']) & 
+                (df['Category'] == 'Equity') & 
+                (~df['Name'].str.lower().str.contains('debt|bond|income'))
+            ].sort_values(['Freq_Score', 'Avg_Return'], ascending=[False, False])
         
-        # DIVERSIFICATION
+        # DIVERSIFY
         fresh = candidates[~candidates['Code'].isin(used_funds)]
         if fresh.empty: fresh = candidates
-        recommendations = fresh.head(2)
-        used_funds.extend(recommendations['Code'].tolist())
+        recs = fresh.head(2)
+        used_funds.extend(recs['Code'].tolist())
 
         # MATH
-        r = ret / 100 / 12
-        n = goal['yrs'] * 12
+        r = ret/1200
+        n = goal['yrs']*12
         sip = goal['amt'] * r / ((1+r)**n - 1)
         total_sip += sip
-        
-        # TAX (LTCG > 1.25L is 12.5%)
-        gains = goal['amt'] - (sip * n)
+        gains = goal['amt'] - (sip*n)
         tax = (gains - 125000) * 0.125 if gains > 125000 else 0
 
         # DISPLAY
@@ -112,45 +109,33 @@ if st.session_state.goals:
             c1, c2 = st.columns([1, 1.5])
             with c1:
                 st.metric("SIP Required", f"{format_inr(sip)}/mo")
-                st.caption(f"Strategy: {strat} ({ret}%)")
+                st.caption(f"Strategy: {strat}")
                 if tax > 50000: st.warning(f"⚠️ Est. Tax: {format_inr(tax)}")
                 else: st.success("✅ Tax efficient")
             with c2:
                 st.write("**Recommended Funds:**")
-                for _, f in recommendations.iterrows():
+                for _, f in recs.iterrows():
                     st.markdown(f"**{f['Name']}**")
                     st.caption(f"Score: {int(f['Freq_Score'])}/5 | Risk: {f['Risk_Grade']} | Avg Ret: {f['Avg_Return']}%")
         st.divider()
-        
-        pdf_data.append({
-            "goal": goal['name'], "target": format_inr(goal['amt']),
-            "sip": format_inr(sip), "funds": list(recommendations['Name'])
-        })
+        pdf_data.append({"goal": goal['name'], "sip": format_inr(sip), "funds": list(recs['Name'])})
 
     st.markdown(f"### 💰 Total Monthly Investment: **{format_inr(total_sip)}**")
-
-    # PDF GEN
+    
+    # PDF
     def create_pdf(data, total):
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
-        pdf.cell(200, 10, txt="Financial Life Plan", ln=True, align='C')
+        pdf.cell(200, 10, "Wealth Plan", ln=True, align='C')
         pdf.ln(10)
         pdf.set_font("Arial", size=12)
-        for item in data:
-            pdf.set_font("Arial", 'B', 12)
-            pdf.cell(200, 10, txt=f"Goal: {item['goal']} ({item['target']})", ln=True)
-            pdf.set_font("Arial", size=12)
-            pdf.cell(200, 8, txt=f"SIP: {item['sip']}", ln=True)
-            pdf.cell(200, 8, txt="Funds:", ln=True)
-            for f in item['funds']: pdf.cell(200, 6, txt=f"- {f}", ln=True)
+        for d in data:
+            pdf.cell(200, 8, f"Goal: {d['goal']} | SIP: {d['sip']}", ln=True)
+            for f in d['funds']: pdf.cell(200, 6, f" - {f}", ln=True)
             pdf.ln(5)
-        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-        pdf.ln(5)
-        pdf.set_font("Arial", 'B', 14)
-        pdf.cell(200, 10, txt=f"Total Monthly: {format_inr(total)}", ln=True)
         return pdf.output(dest='S').encode('latin-1')
 
     if st.button("📄 Download Plan as PDF"):
         b64 = base64.b64encode(create_pdf(pdf_data, total_sip)).decode()
-        st.markdown(f'<a href="data:application/pdf;base64,{b64}" download="Plan.pdf">Download PDF</a>', unsafe_allow_html=True)
+        st.markdown(f'<a href="data:application/pdf;base64,{b64}" download="Plan.pdf">Click to Download PDF</a>', unsafe_allow_html=True)
