@@ -106,12 +106,10 @@ with tab1:
                     st.session_state.goals.pop(i)
                     st.rerun()
 
-            # --- CALCULATIONS (Pre-Layout) ---
-            # 1. Inputs Update
+            # --- CALCULATIONS ---
             current_amt = goal['amt'] / 100000
             current_yrs = goal['yrs']
             
-            # 2. Strategy Logic
             if current_yrs <= 3:
                 strat, ret = "Conservative (Safe Debt)", 7
                 candidates = df[(df['Category'] == 'Safe_Debt') | ((df['Std_Dev'] < 3) & (~df['Name'].str.lower().str.contains('equity')))].sort_values('Std_Dev', ascending=True)
@@ -122,78 +120,81 @@ with tab1:
                 strat, ret = "Aggressive (Wealth Equity)", 13
                 candidates = df[(df['Is_Safe']) & (df['Category'] == 'Equity') & (~df['Name'].str.lower().str.contains('debt|bond|income'))].sort_values(['Freq_Score', 'Avg_Return'], ascending=[False, False])
             
-            # --- LAYOUT: 3 BALANCED COLUMNS ---
-            # Ratio: [1 (Settings), 1 (Chart), 1.2 (Funds)] -> Gives funds more space
-            col1, col2, col3 = st.columns([1, 1, 1.2])
+            # --- LAYOUT: 3 COLUMNS WITH BORDERS ---
+            col1, col2, col3 = st.columns([1, 1.2, 1.3])
             
-            # --- COL 1: SETTINGS & COST ---
+            # --- COL 1: SETTINGS & INPUTS ---
             with col1:
-                st.markdown("##### ⚙️ Settings")
-                new_amt = st.number_input("Target (₹ Lakhs)", 1, 5000, int(current_amt), key=f"amt_{i}")
-                new_yrs = st.slider("Duration (Years)", 1, 30, int(current_yrs), key=f"yrs_{i}")
-                
-                # Update State
-                st.session_state.goals[i]['amt'] = new_amt * 100000
-                st.session_state.goals[i]['yrs'] = new_yrs
-                
-                # Calc SIP based on NEW inputs
-                r = ret/1200; n = new_yrs*12
-                target = new_amt * 100000
-                sip = target * r / ((1+r)**n - 1)
-                total_sip += sip
-                
-                st.divider()
-                st.metric("SIP Required", format_inr(sip))
-                st.caption(f"**Strategy:** {strat}")
+                with st.container(border=True):
+                    st.markdown("##### ⚙️ Settings")
+                    new_amt = st.number_input("Target (₹ Lakhs)", 1, 5000, int(current_amt), key=f"amt_{i}")
+                    new_yrs = st.slider("Duration (Years)", 1, 30, int(current_yrs), key=f"yrs_{i}")
+                    
+                    st.session_state.goals[i]['amt'] = new_amt * 100000
+                    st.session_state.goals[i]['yrs'] = new_yrs
+                    
+                    # Calc
+                    r = ret/1200; n = new_yrs*12
+                    target = new_amt * 100000
+                    sip = target * r / ((1+r)**n - 1)
+                    total_sip += sip
+                    
+                    st.divider()
+                    st.metric("SIP Required", format_inr(sip))
+                    st.caption(f"**Strategy:** {strat}")
 
-            # --- COL 2: VISUALS & OUTCOME ---
+            # --- COL 2: VISUALS (With Fixed Tooltip) ---
             with col2:
-                st.markdown("##### 📊 Projection")
-                
-                total_invested = sip * n
-                est_gain = target - total_invested
-                
-                # Bigger Donut Chart
-                chart_data = pd.DataFrame({
-                    "Category": ["Invested", "Profit"],
-                    "Amount": [total_invested, est_gain]
-                })
-                base = alt.Chart(chart_data).encode(theta=alt.Theta("Amount", stack=True))
-                pie = base.mark_arc(innerRadius=70, outerRadius=100).encode( # Increased Size
-                    color=alt.Color("Category", scale=alt.Scale(domain=["Invested", "Profit"], range=['#34495E', '#2ECC71']), legend=None),
-                    tooltip=["Category", alt.Tooltip("Amount", format=",.0f")]
-                )
-                st.altair_chart(pie, use_container_width=True)
-                
-                # Profit Metric Centered visually by being alone
-                st.metric("Estimated Profit", format_inr(est_gain), delta=f"{int((est_gain/total_invested)*100)}% Returns")
-                
-                # Inflation Info
-                inflation_adjusted = target / ((1.06)**new_yrs)
-                st.caption(f"📉 **Reality Check:** Due to inflation, **{format_inr(target)}** in {datetime.datetime.now().year + new_yrs} will act like **{format_inr(inflation_adjusted)}** today.")
+                with st.container(border=True):
+                    st.markdown("##### 📊 Projection")
+                    
+                    total_invested = sip * n
+                    est_gain = target - total_invested
+                    
+                    # Create Data with Pre-Formatted Label for Tooltip
+                    chart_data = pd.DataFrame({
+                        "Category": ["Invested", "Profit"],
+                        "Amount": [total_invested, est_gain],
+                        "Label": [format_inr(total_invested), format_inr(est_gain)] # This string will show in tooltip
+                    })
+                    
+                    base = alt.Chart(chart_data).encode(theta=alt.Theta("Amount", stack=True))
+                    pie = base.mark_arc(innerRadius=60, outerRadius=85).encode(
+                        color=alt.Color("Category", scale=alt.Scale(domain=["Invested", "Profit"], range=['#34495E', '#2ECC71']), legend=None),
+                        tooltip=["Category", alt.Tooltip("Label", title="Amount")] # Use Label instead of raw Amount
+                    )
+                    st.altair_chart(pie, use_container_width=True)
+                    
+                    # Profit Metric
+                    st.metric("Estimated Profit", format_inr(est_gain), delta=f"{int((est_gain/total_invested)*100)}% Returns")
+                    
+                    # Inflation Reality
+                    inflation_adjusted = target / ((1.06)**new_yrs)
+                    st.caption(f"📉 **Inflation Reality:** {format_inr(target)} in {datetime.datetime.now().year + new_yrs} ≈ **{format_inr(inflation_adjusted)}** today.")
 
             # --- COL 3: FUNDS ---
             with col3:
-                st.markdown("##### 🚀 Recommended Funds")
-                
-                recs = []
-                curr_amcs = []
-                for _, fund in candidates.iterrows():
-                    if len(recs) >= 2: break
-                    amc = fund['Name'].split()[0]
-                    if fund['Code'] not in used_funds and amc not in curr_amcs:
-                        recs.append(fund)
-                        used_funds.append(fund['Code'])
-                        curr_amcs.append(amc)
-                recs_df = pd.DataFrame(recs)
-                
-                for _, f in recs_df.iterrows():
-                    with st.container(border=True):
+                with st.container(border=True):
+                    st.markdown("##### 🚀 Recommended Funds")
+                    
+                    recs = []
+                    curr_amcs = []
+                    for _, fund in candidates.iterrows():
+                        if len(recs) >= 2: break
+                        amc = fund['Name'].split()[0]
+                        if fund['Code'] not in used_funds and amc not in curr_amcs:
+                            recs.append(fund)
+                            used_funds.append(fund['Code'])
+                            curr_amcs.append(amc)
+                    recs_df = pd.DataFrame(recs)
+                    
+                    for _, f in recs_df.iterrows():
                         st.markdown(f"**{f['Name']}**")
                         if strat.startswith("Conservative") and f['Freq_Score'] < 3:
                             st.caption(f"🛡️ Safe Choice | Risk: {f['Risk_Grade']}")
                         else:
                             st.caption(f"⭐ Score: {int(f['Freq_Score'])}/5 | Avg Ret: {f['Avg_Return']}%")
+                        st.divider()
 
             st.divider()
             
