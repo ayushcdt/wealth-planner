@@ -4,7 +4,7 @@ from fpdf import FPDF
 import base64
 from mftool import Mftool
 import datetime
-import altair as alt  # NEW: Imported for Pro Charts
+import altair as alt
 
 # --- CONFIG ---
 st.set_page_config(page_title="Universal Wealth Manager", page_icon="📈", layout="wide")
@@ -147,27 +147,23 @@ with tab1:
                     st.metric("You Invest", format_inr(total_invested))
                     st.metric("Est. Gains", format_inr(est_gain), delta=f"+{roi_pct:.0f}% Profit")
                     
-                    # --- NEW: PROFESSIONAL ALTAIR CHART ---
-                    # 1. Prepare Data with Pre-Formatted Strings for Tooltip
+                    # --- NEW: PRO DONUT CHART ---
                     chart_data = pd.DataFrame({
-                        "Category": ["Principal", "Profit"],
-                        "Amount": [total_invested, est_gain],
-                        "Label": [format_inr(total_invested), format_inr(est_gain)], # Clean String
-                        "Color": ["#FF6B6B", "#4ECDC4"] # Soft Red & Teal
+                        "Category": ["Invested", "Profit"],
+                        "Amount": [total_invested, est_gain]
                     })
                     
-                    # 2. Build Chart
-                    c = alt.Chart(chart_data).mark_bar(cornerRadiusTopLeft=10, cornerRadiusTopRight=10).encode(
-                        x=alt.X('Category', sort=None, axis=alt.Axis(labelAngle=0, title=None)),
-                        y=alt.Y('Amount', axis=None), # Hide Y-Axis numbers for cleaner look
-                        color=alt.Color('Category', scale=alt.Scale(range=['#FF6B6B', '#4ECDC4']), legend=None),
-                        tooltip=[
-                            alt.Tooltip('Category', title='Type'),
-                            alt.Tooltip('Label', title='Amount') # Shows "₹2.54 Cr"
-                        ]
-                    ).properties(height=200)
+                    # Altair Donut Chart
+                    base = alt.Chart(chart_data).encode(
+                        theta=alt.Theta("Amount", stack=True)
+                    )
                     
-                    st.altair_chart(c, use_container_width=True)
+                    pie = base.mark_arc(innerRadius=60, outerRadius=85).encode(
+                        color=alt.Color("Category", scale=alt.Scale(domain=["Invested", "Profit"], range=['#34495E', '#2ECC71']), legend=alt.Legend(orient="bottom")),
+                        tooltip=["Category", alt.Tooltip("Amount", format=",.0f")]
+                    )
+                    
+                    st.altair_chart(pie, use_container_width=True)
                     
                 with c3:
                     for _, f in recs_df.iterrows():
