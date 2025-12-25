@@ -80,7 +80,6 @@ tab1, tab2 = st.tabs(["🎯 Plan Future Goals", "📊 Track Past Investments"])
 with tab1:
     if 'goals' not in st.session_state: st.session_state.goals = []
     
-    # "Add Goal" is now in an expander to keep the UI clean
     with st.expander("➕ Create New Goal", expanded=not st.session_state.goals):
         c1, c2, c3 = st.columns(3)
         g_name = c1.text_input("Goal Name", placeholder="e.g. Dream Home")
@@ -96,7 +95,6 @@ with tab1:
         used_funds = []
         pdf_data = []
 
-        # Iterate through goals
         for i, goal in enumerate(st.session_state.goals):
             
             # --- CARD HEADER ---
@@ -108,82 +106,76 @@ with tab1:
                     st.session_state.goals.pop(i)
                     st.rerun()
 
-            # --- MAIN DASHBOARD GRID ---
-            # Col 1: EDITABLE INPUTS
-            # Col 2: VISUALS + INFLATION INFO
-            # Col 3: FUNDS
-            c1, c2, c3 = st.columns([1, 1, 1])
+            # --- CALCULATIONS (Pre-Layout) ---
+            # 1. Inputs Update
+            current_amt = goal['amt'] / 100000
+            current_yrs = goal['yrs']
             
-            # --- COLUMN 1: EDIT & STRATEGY ---
-            with c1:
-                st.markdown("##### 🛠️ Goal Settings")
+            # 2. Strategy Logic
+            if current_yrs <= 3:
+                strat, ret = "Conservative (Safe Debt)", 7
+                candidates = df[(df['Category'] == 'Safe_Debt') | ((df['Std_Dev'] < 3) & (~df['Name'].str.lower().str.contains('equity')))].sort_values('Std_Dev', ascending=True)
+            elif current_yrs <= 7:
+                strat, ret = "Balanced (Hybrid/Large Cap)", 10
+                candidates = df[(df['Is_Safe']) & (df['Risk_Grade'] != 'High') & (df['Name'].str.lower().str.contains('hybrid|large|balanced|bluechip'))].sort_values('Freq_Score', ascending=False)
+            else:
+                strat, ret = "Aggressive (Wealth Equity)", 13
+                candidates = df[(df['Is_Safe']) & (df['Category'] == 'Equity') & (~df['Name'].str.lower().str.contains('debt|bond|income'))].sort_values(['Freq_Score', 'Avg_Return'], ascending=[False, False])
+            
+            # --- LAYOUT: 3 BALANCED COLUMNS ---
+            # Ratio: [1 (Settings), 1 (Chart), 1.2 (Funds)] -> Gives funds more space
+            col1, col2, col3 = st.columns([1, 1, 1.2])
+            
+            # --- COL 1: SETTINGS & COST ---
+            with col1:
+                st.markdown("##### ⚙️ Settings")
+                new_amt = st.number_input("Target (₹ Lakhs)", 1, 5000, int(current_amt), key=f"amt_{i}")
+                new_yrs = st.slider("Duration (Years)", 1, 30, int(current_yrs), key=f"yrs_{i}")
                 
-                # Live Editing Widgets
-                new_amt = st.number_input(f"Target (₹ Lakhs)", 1, 5000, int(goal['amt']/100000), key=f"amt_{i}")
-                new_yrs = st.slider(f"Duration (Years)", 1, 30, goal['yrs'], key=f"yrs_{i}")
-                
-                # Update Session State instantly
+                # Update State
                 st.session_state.goals[i]['amt'] = new_amt * 100000
                 st.session_state.goals[i]['yrs'] = new_yrs
                 
-                # Completion Date Logic
-                finish_year = datetime.datetime.now().year + new_yrs
-                st.caption(f"🗓️ Target Completion: **{finish_year}**")
-
-                # Strategy Logic
-                if new_yrs <= 3:
-                    strat, ret = "Conservative (Safe Debt)", 7
-                    candidates = df[(df['Category'] == 'Safe_Debt') | ((df['Std_Dev'] < 3) & (~df['Name'].str.lower().str.contains('equity')))].sort_values('Std_Dev', ascending=True)
-                elif new_yrs <= 7:
-                    strat, ret = "Balanced (Hybrid/Large Cap)", 10
-                    candidates = df[(df['Is_Safe']) & (df['Risk_Grade'] != 'High') & (df['Name'].str.lower().str.contains('hybrid|large|balanced|bluechip'))].sort_values('Freq_Score', ascending=False)
-                else:
-                    strat, ret = "Aggressive (Wealth Equity)", 13
-                    candidates = df[(df['Is_Safe']) & (df['Category'] == 'Equity') & (~df['Name'].str.lower().str.contains('debt|bond|income'))].sort_values(['Freq_Score', 'Avg_Return'], ascending=[False, False])
-                
-                st.info(f"**Strategy:** {strat}")
-
-            # --- COLUMN 2: CHARTS & INFLATION ---
-            with c2:
-                # Calc
+                # Calc SIP based on NEW inputs
                 r = ret/1200; n = new_yrs*12
                 target = new_amt * 100000
                 sip = target * r / ((1+r)**n - 1)
                 total_sip += sip
                 
+                st.divider()
+                st.metric("SIP Required", format_inr(sip))
+                st.caption(f"**Strategy:** {strat}")
+
+            # --- COL 2: VISUALS & OUTCOME ---
+            with col2:
+                st.markdown("##### 📊 Projection")
+                
                 total_invested = sip * n
                 est_gain = target - total_invested
                 
-                # The Charts
-                st.markdown("##### 📊 Projection")
+                # Bigger Donut Chart
                 chart_data = pd.DataFrame({
                     "Category": ["Invested", "Profit"],
                     "Amount": [total_invested, est_gain]
                 })
                 base = alt.Chart(chart_data).encode(theta=alt.Theta("Amount", stack=True))
-                pie = base.mark_arc(innerRadius=50, outerRadius=70).encode(
+                pie = base.mark_arc(innerRadius=70, outerRadius=100).encode( # Increased Size
                     color=alt.Color("Category", scale=alt.Scale(domain=["Invested", "Profit"], range=['#34495E', '#2ECC71']), legend=None),
                     tooltip=["Category", alt.Tooltip("Amount", format=",.0f")]
                 )
                 st.altair_chart(pie, use_container_width=True)
                 
-                # Key Metrics under Chart
-                mc1, mc2 = st.columns(2)
-                mc1.metric("SIP", format_inr(sip))
-                mc2.metric("Profit", format_inr(est_gain), delta=f"{int((est_gain/total_invested)*100)}%")
-
-                # --- NEW: INFLATION REALITY CHECK ---
-                # Inflation logic: PV = FV / (1.06)^n
+                # Profit Metric Centered visually by being alone
+                st.metric("Estimated Profit", format_inr(est_gain), delta=f"{int((est_gain/total_invested)*100)}% Returns")
+                
+                # Inflation Info
                 inflation_adjusted = target / ((1.06)**new_yrs)
-                st.markdown("---")
-                st.markdown(f"**📉 Inflation Reality:**")
-                st.caption(f"Due to 6% inflation, your **{format_inr(target)}** goal will have the purchasing power of roughly **{format_inr(inflation_adjusted)}** in today's money.")
+                st.caption(f"📉 **Reality Check:** Due to inflation, **{format_inr(target)}** in {datetime.datetime.now().year + new_yrs} will act like **{format_inr(inflation_adjusted)}** today.")
 
-            # --- COLUMN 3: FUNDS ---
-            with c3:
+            # --- COL 3: FUNDS ---
+            with col3:
                 st.markdown("##### 🚀 Recommended Funds")
                 
-                # Diversification
                 recs = []
                 curr_amcs = []
                 for _, fund in candidates.iterrows():
