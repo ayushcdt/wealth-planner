@@ -14,7 +14,6 @@ mf = Mftool()
 def load_data():
     try:
         df = pd.read_csv('universe_data.csv')
-        # Cleaning & Safety Filters
         df = df[~df['Name'].str.lower().str.contains('bonus|dividend')]
         zombies = ['reliance', 'fixed tenure', 'dual advantage', 'capital protection', 'interval', 'quarterly', 'series']
         df = df[~df['Name'].str.lower().apply(lambda x: any(z in x for z in zombies))]
@@ -40,36 +39,21 @@ def format_inr(number):
 
 def get_sip_history(code, monthly_amt, years):
     try:
-        # Live Fetch for specific fund accuracy
         data = mf.get_scheme_historical_nav(str(code), as_json=False)
         if not data: return None
-        
         nav_df = pd.DataFrame(data['data'])
-        nav_df['nav'] = pd.to_numeric(nav_df['nav'])
-        nav_df['date'] = pd.to_datetime(nav_df['date'], format='%d-%m-%Y')
-        nav_df = nav_df.sort_values('date') # Oldest to Newest
-        
-        # Filter for duration
+        nav_df['nav'] = pd.to_numeric(nav_df['nav']); nav_df['date'] = pd.to_datetime(nav_df['date'], format='%d-%m-%Y')
+        nav_df = nav_df.sort_values('date')
         start_date = datetime.datetime.now() - datetime.timedelta(days=years*365)
         nav_df = nav_df[nav_df['date'] >= start_date]
-        
-        # Simulate Monthly SIP (Resample to Business Month Start)
         nav_df.set_index('date', inplace=True)
-        # We take the 1st available NAV of every month
         monthly_data = nav_df.resample('MS').first().dropna()
-        
-        total_units = 0
-        invested = 0
-        
-        # Calculate Accumulation
+        total_units = 0; invested = 0
         for nav in monthly_data['nav']:
-            units = monthly_amt / nav
-            total_units += units
+            total_units += monthly_amt / nav
             invested += monthly_amt
-            
         latest_nav = nav_df.iloc[-1]['nav']
         current_value = total_units * latest_nav
-        
         return invested, current_value, (current_value - invested), ((current_value/invested)-1)*100
     except: return None
 
@@ -77,11 +61,10 @@ def get_sip_history(code, monthly_amt, years):
 st.title("📈 Universal Wealth Manager")
 st.caption(f"Database: {len(df)} Verified Funds")
 
-# --- TABS ---
 tab1, tab2 = st.tabs(["🎯 Plan Future Goals", "📊 Track Past Investments"])
 
 # ==========================================
-# TAB 1: FUTURE PLANNER (Your Existing Tool)
+# TAB 1: FUTURE PLANNER (Updated with Gains)
 # ==========================================
 with tab1:
     if 'goals' not in st.session_state: st.session_state.goals = []
@@ -108,7 +91,7 @@ with tab1:
                 st.session_state.goals.pop(i)
                 st.rerun()
             
-            # STRATEGY ENGINE
+            # STRATEGY
             if goal['yrs'] <= 3:
                 strat, ret = "Conservative (Safe Debt)", 7
                 candidates = df[(df['Category'] == 'Safe_Debt') | ((df['Std_Dev'] < 3) & (~df['Name'].str.lower().str.contains('equity')))].sort_values('Std_Dev', ascending=True)
@@ -136,22 +119,40 @@ with tab1:
             sip = goal['amt'] * r / ((1+r)**n - 1)
             total_sip += sip
             
+            # --- NEW CALC: BREAKDOWN ---
+            total_invested = sip * n
+            est_gain = goal['amt'] - total_invested
+            
             # DISPLAY
             with st.container():
-                c1, c2 = st.columns([1, 1.5])
+                c1, c2, c3 = st.columns([1, 1, 1.5])
+                
+                # Column 1: The Requirement
                 with c1:
                     st.metric("SIP Required", f"{format_inr(sip)}/mo")
                     st.caption(f"Strategy: {strat}")
+                
+                # Column 2: The Breakdown (NEW)
                 with c2:
+                    st.metric("You Invest", format_inr(total_invested))
+                    st.metric("Est. Gains", format_inr(est_gain), delta="Profit")
+                    
+                # Column 3: The Funds
+                with c3:
                     for _, f in recs_df.iterrows():
                         st.markdown(f"**{f['Name']}**")
-                        # Contextual Explainer
                         if strat.startswith("Conservative") and f['Freq_Score'] < 3:
-                            st.caption(f"🛡️ Safe Choice (Low Volatility) | Risk: {f['Risk_Grade']}")
+                            st.caption(f"🛡️ Safe Choice | Risk: {f['Risk_Grade']}")
                         else:
                             st.caption(f"Score: {int(f['Freq_Score'])}/5 | Avg Ret: {f['Avg_Return']}%")
             st.divider()
-            pdf_data.append({"goal": goal['name'], "sip": format_inr(sip), "funds": list(recs_df['Name'])})
+            
+            # Add breakdown to PDF data
+            pdf_data.append({
+                "goal": goal['name'], "sip": format_inr(sip), 
+                "invested": format_inr(total_invested), "gain": format_inr(est_gain),
+                "funds": list(recs_df['Name'])
+            })
 
         st.markdown(f"### 💰 Total Monthly Investment: **{format_inr(total_sip)}**")
         
@@ -159,74 +160,56 @@ with tab1:
         def create_pdf(data, total):
             pdf = FPDF()
             pdf.add_page()
-            pdf.set_font("Arial", 'B', 16); pdf.cell(200, 10, "Wealth Plan", ln=True, align='C'); pdf.ln(10)
+            pdf.set_font("Arial", 'B', 16); pdf.cell(200, 10, "Wealth Plan Breakdown", ln=True, align='C'); pdf.ln(10)
             pdf.set_font("Arial", size=12)
             for d in data:
-                pdf.cell(200, 8, f"Goal: {d['goal']} | SIP: {d['sip']}", ln=True)
-                pdf.set_font("Arial", size=10)
-                for f in d['funds']: pdf.cell(200, 6, f" - {f}", ln=True)
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(200, 8, f"Goal: {d['goal']}", ln=True)
+                pdf.set_font("Arial", size=11)
+                pdf.cell(200, 6, f" - SIP Required: {d['sip']}", ln=True)
+                pdf.cell(200, 6, f" - You Invest: {d['invested']}", ln=True)
+                pdf.cell(200, 6, f" - Est. Profit: {d['gain']}", ln=True)
+                pdf.ln(2)
+                pdf.set_font("Arial", 'I', 10)
+                pdf.cell(200, 6, "Recommended Funds:", ln=True)
+                for f in d['funds']: pdf.cell(200, 6, f"   {f}", ln=True)
                 pdf.ln(5); pdf.set_font("Arial", size=12)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y()); pdf.ln(5); pdf.set_font("Arial", 'B', 14)
-            pdf.cell(200, 10, f"Total Monthly: {format_inr(total)}", ln=True)
+            pdf.cell(200, 10, f"Total Monthly Investment: {format_inr(total)}", ln=True)
             return pdf.output(dest='S').encode('latin-1')
 
-        if st.button("Download PDF"):
+        if st.button("Download Detailed PDF"):
             b64 = base64.b64encode(create_pdf(pdf_data, total_sip)).decode()
             st.markdown(f'<a href="data:application/pdf;base64,{b64}" download="Plan.pdf">Click to Download PDF</a>', unsafe_allow_html=True)
 
 # ==========================================
-# TAB 2: PORTFOLIO TRACKER (The New Feature)
+# TAB 2: PORTFOLIO TRACKER
 # ==========================================
 with tab2:
     st.header("📊 Check Your SIP Performance")
-    st.markdown("Analyze how your existing investments have performed over time.")
-    
-    # 1. Select Fund
     fund_list = df['Name'].tolist()
-    selected_fund_name = st.selectbox("Select Fund you Invested in:", fund_list)
-    
+    selected_fund_name = st.selectbox("Select Fund:", fund_list)
     c1, c2 = st.columns(2)
-    sip_amt = c1.number_input("Monthly SIP Amount (₹)", 500, 100000, 5000)
-    years_ago = c2.slider("Started how many years ago?", 1, 10, 3)
+    sip_amt = c1.number_input("Monthly SIP (₹)", 500, 100000, 5000)
+    years_ago = c2.slider("Started (Years ago)", 1, 10, 3)
     
     if st.button("Analyze Returns"):
-        with st.spinner("Fetching historical data..."):
-            # Find the code for the selected name
+        with st.spinner("Fetching data..."):
             fund_code = df[df['Name'] == selected_fund_name]['Code'].values[0]
             fund_stats = df[df['Code'] == fund_code].iloc[0]
-            
-            # Calculate Backtest
             result = get_sip_history(fund_code, sip_amt, years_ago)
             
             if result:
                 invested, current, gain, abs_ret = result
-                
-                # A. The Numbers
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Total Invested", format_inr(invested))
                 m2.metric("Current Value", format_inr(current), delta=f"{abs_ret:.1f}%")
                 m3.metric("Net Profit", format_inr(gain))
                 
-                st.divider()
-                
-                # B. The Health Check (Consistency Audit)
-                st.subheader("🏥 Portfolio Health Check")
+                st.subheader("🏥 Health Check")
                 score = int(fund_stats['Freq_Score'])
-                
-                col_score, col_advice = st.columns([1, 3])
-                
-                with col_score:
-                    st.metric("Quality Score", f"{score}/5")
-                
-                with col_advice:
-                    if score >= 4:
-                        st.success("🌟 **Excellent Fund!** This fund is a consistent winner. Keep investing.")
-                    elif score == 3:
-                        st.info("✅ **Good Fund.** It performs reasonably well. Hold.")
-                    elif fund_stats['Category'] == 'Safe_Debt':
-                         st.success("🛡️ **Safe Debt Fund.** Ignore the score. It is doing its job of keeping money safe.")
-                    else:
-                        st.error("⚠️ **Underperformer.** This fund has rarely beaten the market. Consider switching to a 4/5 or 5/5 fund.")
-                
-            else:
-                st.error("Could not fetch historical data for this fund. Try a different one.")
+                if score >= 4: st.success("🌟 Excellent Fund! Keep investing.")
+                elif score == 3: st.info("✅ Good Fund. Hold.")
+                elif fund_stats['Category'] == 'Safe_Debt': st.success("🛡️ Safe Debt Fund.")
+                else: st.error("⚠️ Underperformer. Consider switching.")
+            else: st.error("Data unavailable.")
