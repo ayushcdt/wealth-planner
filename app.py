@@ -69,7 +69,7 @@ def get_sip_history(code, monthly_amt, years):
     except: return None
 
 # --- APP UI ---
-st.title("📈 Universal Wealth Manager")
+st.title("Universal Wealth Manager")
 st.caption(f"Database: {len(df)} Verified Funds | Speed Optimized ⚡")
 
 tab1, tab2 = st.tabs(["🎯 Plan Future Goals", "📊 Track Past Investments"])
@@ -110,6 +110,7 @@ with tab1:
             current_amt = goal['amt'] / 100000
             current_yrs = goal['yrs']
             
+            # Strategy Logic
             if current_yrs <= 3:
                 strat, ret = "Conservative (Safe Debt)", 7
                 candidates = df[(df['Category'] == 'Safe_Debt') | ((df['Std_Dev'] < 3) & (~df['Name'].str.lower().str.contains('equity')))].sort_values('Std_Dev', ascending=True)
@@ -123,17 +124,20 @@ with tab1:
             # --- LAYOUT: 3 COLUMNS WITH BORDERS ---
             col1, col2, col3 = st.columns([1, 1.2, 1.3])
             
-            # --- COL 1: SETTINGS & INPUTS ---
+            # --- COL 1: SETTINGS & COST ---
             with col1:
                 with st.container(border=True):
                     st.markdown("##### ⚙️ Settings")
+                    
+                    # Edit Inputs
                     new_amt = st.number_input("Target (₹ Lakhs)", 1, 5000, int(current_amt), key=f"amt_{i}")
                     new_yrs = st.slider("Duration (Years)", 1, 30, int(current_yrs), key=f"yrs_{i}")
                     
+                    # Update State
                     st.session_state.goals[i]['amt'] = new_amt * 100000
                     st.session_state.goals[i]['yrs'] = new_yrs
                     
-                    # Calc
+                    # Calculate
                     r = ret/1200; n = new_yrs*12
                     target = new_amt * 100000
                     sip = target * r / ((1+r)**n - 1)
@@ -143,7 +147,7 @@ with tab1:
                     st.metric("SIP Required", format_inr(sip))
                     st.caption(f"**Strategy:** {strat}")
 
-            # --- COL 2: VISUALS (With Fixed Tooltip) ---
+            # --- COL 2: VISUALS (Fixed Tooltip) ---
             with col2:
                 with st.container(border=True):
                     st.markdown("##### 📊 Projection")
@@ -151,24 +155,27 @@ with tab1:
                     total_invested = sip * n
                     est_gain = target - total_invested
                     
-                    # Create Data with Pre-Formatted Label for Tooltip
+                    # --- CHART DATA PREP ---
+                    # We add a 'Label' column so the tooltip looks pretty
                     chart_data = pd.DataFrame({
                         "Category": ["Invested", "Profit"],
                         "Amount": [total_invested, est_gain],
-                        "Label": [format_inr(total_invested), format_inr(est_gain)] # This string will show in tooltip
+                        "Formatted Amount": [format_inr(total_invested), format_inr(est_gain)]
                     })
                     
+                    # Altair Donut
                     base = alt.Chart(chart_data).encode(theta=alt.Theta("Amount", stack=True))
                     pie = base.mark_arc(innerRadius=60, outerRadius=85).encode(
                         color=alt.Color("Category", scale=alt.Scale(domain=["Invested", "Profit"], range=['#34495E', '#2ECC71']), legend=None),
-                        tooltip=["Category", alt.Tooltip("Label", title="Amount")] # Use Label instead of raw Amount
+                        # TOOLTIP FIX: Use the 'Formatted Amount' column
+                        tooltip=["Category", alt.Tooltip("Formatted Amount", title="Amount")]
                     )
                     st.altair_chart(pie, use_container_width=True)
                     
-                    # Profit Metric
+                    # Metric
                     st.metric("Estimated Profit", format_inr(est_gain), delta=f"{int((est_gain/total_invested)*100)}% Returns")
                     
-                    # Inflation Reality
+                    # Inflation Check
                     inflation_adjusted = target / ((1.06)**new_yrs)
                     st.caption(f"📉 **Inflation Reality:** {format_inr(target)} in {datetime.datetime.now().year + new_yrs} ≈ **{format_inr(inflation_adjusted)}** today.")
 
